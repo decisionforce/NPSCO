@@ -1,8 +1,18 @@
-import os
-import gym
 import argparse
-import matplotlib.pyplot as plt
-from IPython import display
+import math
+import os
+from collections import namedtuple
+from os import makedirs as mkdir
+from os.path import join as joindir
+
+import gym
+import numpy as np
+import pandas as pd
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.optim as opt
+from torch import Tensor
 
 parser = argparse.ArgumentParser()
 parser.add_argument(
@@ -36,17 +46,12 @@ parser.add_argument(
     default=0)
 config = parser.parse_args()
 
-
 os.environ['CUDA_VISIBLE_DEVICES'] = str(config.use_gpu)
-    
-    
-    
+
 ENV_NAME = config.env_name
-USE_GPU = True if 0<=config.use_gpu<=7 else False
+USE_GPU = True if 0 <= config.use_gpu <= 7 else False
 env = gym.make(ENV_NAME)
 env.reset()
-
-
 
 rwds_history = []
 for repeat in range(config.num_repeat):
@@ -59,35 +64,14 @@ for repeat in range(config.num_repeat):
         `Tensor2` means 2D-Tensor (num_samples, num_dims) 
     """
 
-    import gym
-    import torch
-    import torch.nn as nn
-    import torch.optim as opt
-    from torch import Tensor
-    from torch.autograd import Variable
-    from collections import namedtuple
-    from itertools import count
-    import torch.nn.functional as F
-    #import matplotlib
-    #matplotlib.use('agg')
-    import matplotlib.pyplot as plt
-    from os.path import join as joindir
-    from os import makedirs as mkdir
-    import pandas as pd
-    import numpy as np
-    import argparse
-    import datetime
-    import math
-    import random
-
-
     Transition = namedtuple('Transition', ('state', 'value', 'action', 'logproba', 'mask', 'next_state', 'reward'))
     EPS = 1e-10
     RESULT_DIR = 'Result_PPO'
     mkdir(RESULT_DIR, exist_ok=True)
-    mkdir(ENV_NAME.split('-')[0]+'/CheckPoints',exist_ok=True)
-    mkdir(ENV_NAME.split('-')[0]+'/Rwds',exist_ok=True)
+    mkdir(ENV_NAME.split('-')[0] + '/CheckPoints', exist_ok=True)
+    mkdir(ENV_NAME.split('-')[0] + '/Rwds', exist_ok=True)
     rwds = []
+
 
     class args(object):
         env_name = ENV_NAME
@@ -258,7 +242,7 @@ for repeat in range(config.num_repeat):
             action_mean, action_logstd = self._forward_actor(states)
             action_mean = action_mean.cpu()
             action_logstd = action_logstd.cpu()
-            #print(actions,action_mean,action_logstd.cpu())
+            # print(actions,action_mean,action_logstd.cpu())
             logproba = self._normal_logproba(actions.cpu(), action_mean, action_logstd.cpu())
             return logproba
 
@@ -276,16 +260,19 @@ for repeat in range(config.num_repeat):
         def __len__(self):
             return len(self.memory)
 
-    env = gym.make(ENV_NAME)  
+
+    env = gym.make(ENV_NAME)
     num_inputs = env.observation_space.shape[0]
     num_actions = env.action_space.shape[0]
-    
+
     if USE_GPU:
         network = ActorCritic(num_inputs, num_actions, layer_norm=args.layer_norm).cuda()
         print('using GPU-{}'.format(config.use_gpu))
     else:
         network = ActorCritic(num_inputs, num_actions, layer_norm=args.layer_norm)
     network.train()
+
+
     def ppo(args):
         env = gym.make(args.env_name)
         num_inputs = env.observation_space.shape[0]
@@ -294,7 +281,7 @@ for repeat in range(config.num_repeat):
         env.seed(args.seed)
         torch.manual_seed(args.seed)
 
-        #network = ActorCritic(num_inputs, num_actions, layer_norm=args.layer_norm)
+        # network = ActorCritic(num_inputs, num_actions, layer_norm=args.layer_norm)
         optimizer = opt.Adam(network.parameters(), lr=args.lr)
 
         running_state = ZFilter((num_inputs,), clip=5.0)
@@ -341,15 +328,15 @@ for repeat in range(config.num_repeat):
                         break
 
                     state = next_state
-                        
+
                 num_steps += (t + 1)
                 global_steps += (t + 1)
                 reward_list.append(reward_sum)
                 len_list.append(t + 1)
             reward_record.append({
-                'episode': i_episode, 
-                'steps': global_steps, 
-                'meanepreward': np.mean(reward_list), 
+                'episode': i_episode,
+                'steps': global_steps,
+                'meanepreward': np.mean(reward_list),
                 'meaneplen': np.mean(len_list)})
             rwds.extend(reward_list)
             batch = memory.sample()
@@ -393,7 +380,7 @@ for repeat in range(config.num_repeat):
                 minibatch_returns = returns[minibatch_ind]
                 minibatch_newvalues = network._forward_critic(minibatch_states.cuda()).cpu().flatten()
 
-                ratio =  torch.exp(minibatch_newlogproba - minibatch_oldlogproba)
+                ratio = torch.exp(minibatch_newlogproba - minibatch_oldlogproba)
                 surr1 = ratio * minibatch_advantages
                 surr2 = ratio.clamp(1 - clip_now, 1 + clip_now) * minibatch_advantages
                 loss_surr_cpu = - torch.mean(torch.min(surr1, surr2))
@@ -411,9 +398,6 @@ for repeat in range(config.num_repeat):
                 total_loss_cpu.backward()
                 optimizer.step()
 
-                
-                
-
             if args.schedule_clip == 'linear':
                 ep_ratio = 1 - (i_episode / args.num_episode)
                 clip_now = args.clip * ep_ratio
@@ -427,10 +411,11 @@ for repeat in range(config.num_repeat):
                     g['lr'] = lr_now
 
             if i_episode % args.log_num_episode == 0:
-                print("total loss cc",i_episode,reward_record[-1]['meanepreward'],total_loss_cpu.data,loss_surr_cpu.data,loss_value_cpu.data,loss_entropy_cpu.data)
+                print("total loss cc", i_episode, reward_record[-1]['meanepreward'], total_loss_cpu.data, loss_surr_cpu.data, loss_value_cpu.data, loss_entropy_cpu.data)
                 print('-----------------')
 
         return reward_record
+
 
     def test(args):
         record_dfs = []
@@ -442,10 +427,11 @@ for repeat in range(config.num_repeat):
         record_dfs = pd.concat(record_dfs, axis=0)
         record_dfs.to_csv(joindir(RESULT_DIR, 'ppo-record-{}.csv'.format(args.env_name)))
 
+
     if __name__ == '__main__':
         for envname in [ENV_NAME]:
             args.env_name = envname
             test(args)
 
-    torch.save(network.state_dict(),ENV_NAME.split('-')[0] + '/CheckPoints/checkpoint_large_{0}hidden_{1}drop_prob_{2}repeat'.format(config.hid_num,config.drop_prob,repeat)) 
-    np.savetxt(ENV_NAME.split('-')[0] + '/Rwds/rwds_large_{0}hidden_{1}drop_prob_{2}repeat'.format(config.hid_num,config.drop_prob,repeat),rwds)
+    torch.save(network.state_dict(), ENV_NAME.split('-')[0] + '/CheckPoints/checkpoint_large_{0}hidden_{1}drop_prob_{2}repeat'.format(config.hid_num, config.drop_prob, repeat))
+    np.savetxt(ENV_NAME.split('-')[0] + '/Rwds/rwds_large_{0}hidden_{1}drop_prob_{2}repeat'.format(config.hid_num, config.drop_prob, repeat), rwds)

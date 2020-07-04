@@ -1,27 +1,19 @@
 import argparse
+import math
 import os
+from collections import namedtuple
+from os import makedirs as mkdir
+from os.path import join as joindir
+
 import gym
-import matplotlib.pyplot as plt
-from IPython import display
-import os
-import gym
+import numpy as np
+import pandas as pd
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as opt
 from torch import Tensor
-from torch.autograd import Variable
-from collections import namedtuple
-from itertools import count
-import torch.nn.functional as F
-import matplotlib.pyplot as plt
-from os.path import join as joindir
-from os import makedirs as mkdir
-import pandas as pd
-import numpy as np
-import argparse
-import datetime
-import math
-import random
+
 parser = argparse.ArgumentParser()
 parser.add_argument(
     '--hid_num',
@@ -74,13 +66,11 @@ parser.add_argument(
     default=0,
     help='novelty reward weight')
 
-
 config = parser.parse_args()
 ENV_NAME = config.env_name
 env = gym.make(ENV_NAME)
 env.reset()
 os.environ['CUDA_VISIBLE_DEVICES'] = str(config.use_gpu)
-
 
 
 class ActorCritic(nn.Module):
@@ -165,8 +155,6 @@ class ActorCritic(nn.Module):
         action_logstd = action_logstd.cpu()
         logproba = self._normal_logproba(actions.cpu(), action_mean, action_logstd.cpu())
         return logproba
-    
-    
 
 
 rwds_history = []
@@ -177,69 +165,71 @@ num_actions = env.action_space.shape[0]
 for i in range(10):
     try:
         policy_net = ActorCritic(num_inputs, num_actions, layer_norm=True).cuda()
-        policy_net.load_state_dict(torch.load(ENV_NAME.split('-')[0]+'/CheckPoints/checkpoint_{0}hidden_{1}drop_prob_{2}repeat'.format(config.hid_num,config.drop_prob,i)))
-        load_list.append('checkpoint_{0}hidden_{1}drop_prob_{2}repeat'.format(config.hid_num,config.drop_prob,i))
+        policy_net.load_state_dict(torch.load(ENV_NAME.split('-')[0] + '/CheckPoints/checkpoint_{0}hidden_{1}drop_prob_{2}repeat'.format(config.hid_num, config.drop_prob, i)))
+        load_list.append('checkpoint_{0}hidden_{1}drop_prob_{2}repeat'.format(config.hid_num, config.drop_prob, i))
         policy_buffer[str(i)] = policy_net.eval()
     except:
         pass
 fn_list = []
 for i in range(10):
     try:
-        fn_list.append(np.loadtxt(ENV_NAME.split('-')[0]+'/Rwds/rwds_{0}hidden_{1}drop_prob_{2}repeat'.format(config.hid_num,config.drop_prob,i)))
+        fn_list.append(np.loadtxt(ENV_NAME.split('-')[0] + '/Rwds/rwds_{0}hidden_{1}drop_prob_{2}repeat'.format(config.hid_num, config.drop_prob, i)))
     except:
-        print('wrong in ',i)
+        print('wrong in ', i)
 final_100_reward = []
 for i in range(len(fn_list)):
     final_100_reward.append(np.mean(fn_list[i][-100:]))
-print('final 100 mean reward:',np.mean(final_100_reward[:4]))
+print('final 100 mean reward:', np.mean(final_100_reward[:4]))
 
 T_start = 20
 Lower_Novel_Bound = -0.1
 
+RESULT_DIR = ENV_NAME.split('-')[0] + config.file_num + '/Result_PPO'
+mkdir(RESULT_DIR, exist_ok=True)
+mkdir(ENV_NAME.split('-')[0] + config.file_num + '/Rwds', exist_ok=True)
+mkdir(ENV_NAME.split('-')[0] + config.file_num + '/CheckPoints', exist_ok=True)
 
-RESULT_DIR = ENV_NAME.split('-')[0]+config.file_num +'/Result_PPO'
-mkdir(RESULT_DIR,exist_ok=True)
-mkdir(ENV_NAME.split('-')[0]+config.file_num +'/Rwds', exist_ok=True)
-mkdir(ENV_NAME.split('-')[0]+config.file_num +'/CheckPoints', exist_ok=True)    
+
 class calc_policy_novelty(object):
-    def __init__(self,Policy_Buffer,THRESH = config.thres,dis_type='min'):
+    def __init__(self, Policy_Buffer, THRESH=config.thres, dis_type='min'):
         self.Policy_Buffer = Policy_Buffer
         self.num_of_policies = len(Policy_Buffer)
         self.novelty_recorder = np.zeros(self.num_of_policies)
         self.novelty_recorder_len = 0
         self.THRESH = THRESH
         self.dis_type = dis_type
-    def calculate(self,state,action):
+
+    def calculate(self, state, action):
         if len(self.Policy_Buffer) == 0:
             return 0
-        for i,key_i in enumerate(self.Policy_Buffer.keys()):
+        for i, key_i in enumerate(self.Policy_Buffer.keys()):
             self.Policy_Buffer[key_i].eval()
             a_mean, a_logstd, val = self.Policy_Buffer[key_i].forward((Tensor(state).float().unsqueeze(0).cuda()))
             self.novelty_recorder[i] += np.linalg.norm(a_mean.cpu().detach().numpy() - action.cpu().detach().numpy())
-            
-        self.novelty_recorder_len +=1
+
+        self.novelty_recorder_len += 1
         if self.dis_type == 'min':
-            min_novel = np.min(self.novelty_recorder/self.novelty_recorder_len)
+            min_novel = np.min(self.novelty_recorder / self.novelty_recorder_len)
             return min_novel - self.THRESH
         elif self.dis_type == 'max':
-            max_novel = np.max(self.novelty_recorder/self.novelty_recorder_len)
+            max_novel = np.max(self.novelty_recorder / self.novelty_recorder_len)
             return max_novel - self.THRESH
-    
+
+
 train_list = []
 
-for i in range(10,25):
+for i in range(10, 25):
     try:
         policy_net = ActorCritic(num_inputs, num_actions, layer_norm=True).cuda()
-        policy_net.load_state_dict(torch.load(ENV_NAME.split('-')[0]+config.file_num +'/CheckPoints/EarlyStopPolicy_Suc_{0}hidden_{1}threshold_{2}repeat'.format(config.hid_num,config.thres,i)))
-        load_list.append('EarlyStopPolicy_Suc_{0}hidden_{1}threshold_{2}repeat'.format(config.hid_num,config.thres,i))
+        policy_net.load_state_dict(torch.load(ENV_NAME.split('-')[0] + config.file_num + '/CheckPoints/EarlyStopPolicy_Suc_{0}hidden_{1}threshold_{2}repeat'.format(config.hid_num, config.thres, i)))
+        load_list.append('EarlyStopPolicy_Suc_{0}hidden_{1}threshold_{2}repeat'.format(config.hid_num, config.thres, i))
         policy_buffer[str(i)] = policy_net.eval()
     except:
         train_list.append(i)
-print('training list now is:',train_list)
-
+print('training list now is:', train_list)
 
 for repeat in train_list:
-    print(len(policy_buffer),repeat)
+    print(len(policy_buffer), repeat)
     """
     Implementation of PPO
     ref: Schulman, John, et al. "Proximal policy optimization algorithms." arXiv preprint arXiv:1707.06347 (2017).
@@ -249,14 +239,11 @@ for repeat in train_list:
         `Tensor2` means 2D-Tensor (num_samples, num_dims) 
     """
 
- 
-
     Transition = namedtuple('Transition', ('state', 'value', 'action', 'logproba', 'mask', 'next_state', 'reward'))
     EPS = 1e-10
 
-    
-    
     rwds = []
+
 
     class args(object):
         env_name = ENV_NAME
@@ -361,13 +348,14 @@ for repeat in train_list:
         def __len__(self):
             return len(self.memory)
 
-    env = gym.make(ENV_NAME)  
+
+    env = gym.make(ENV_NAME)
     num_inputs = env.observation_space.shape[0]
     num_actions = env.action_space.shape[0]
     network = ActorCritic(num_inputs, num_actions, layer_norm=args.layer_norm).cuda()
     network.train()
-    
-    
+
+
     def ppo(args):
         env = gym.make(args.env_name)
         num_inputs = env.observation_space.shape[0]
@@ -376,7 +364,7 @@ for repeat in train_list:
         env.seed(args.seed)
         torch.manual_seed(args.seed)
 
-        #network = ActorCritic(num_inputs, num_actions, layer_norm=args.layer_norm)
+        # network = ActorCritic(num_inputs, num_actions, layer_norm=args.layer_norm)
         optimizer = opt.Adam(network.parameters(), lr=args.lr)
 
         running_state = ZFilter((num_inputs,), clip=5.0)
@@ -384,7 +372,7 @@ for repeat in train_list:
         # record average 1-round cumulative reward in every episode
         reward_record = []
         reward_record_true = []
-        
+
         global_steps = 0
 
         lr_now = args.lr
@@ -401,9 +389,9 @@ for repeat in train_list:
             early_done = 0
             while num_steps < args.batch_size:
                 state = env.reset()
-                
+
                 cpn = calc_policy_novelty(Policy_Buffer=policy_buffer)
-                
+
                 if args.state_norm:
                     state = running_state(state)
                 reward_sum = 0
@@ -412,20 +400,19 @@ for repeat in train_list:
                 for t in range(args.max_step_per_round):
                     action_mean, action_logstd, value = network(Tensor(state).float().unsqueeze(0).cuda())
 
-
                     action, logproba = network.select_action(action_mean, action_logstd)
                     action = action.cpu().data.numpy()[0]
                     logproba = logproba.cpu().data.numpy()[0]
 
                     next_state, reward, done, _ = env.step(action)
-                    #reward_novel = calc_distance(state,action_mean,policy_buffer) 
-                    reward_novel = cpn.calculate(state,action_mean)
-                    
+                    # reward_novel = calc_distance(state,action_mean,policy_buffer)
+                    reward_novel = cpn.calculate(state, action_mean)
+
                     '''
                     WSR
                     '''
                     reward_true_sum += reward
-                    reward += config.weight * reward_novel 
+                    reward += config.weight * reward_novel
                     reward_sum += reward
                     if args.state_norm:
                         next_state = running_state(next_state)
@@ -434,7 +421,7 @@ for repeat in train_list:
                     memory.push(state, value, action, logproba, mask, next_state, reward)
 
                     if done:
-                        total_done+=1
+                        total_done += 1
                         break
 
                     state = next_state
@@ -445,14 +432,14 @@ for repeat in train_list:
                 reward_list_true.append(reward_true_sum)
                 len_list.append(t + 1)
             reward_record.append({
-                'episode': i_episode, 
-                'steps': global_steps, 
-                'meanepreward': np.mean(reward_list), 
+                'episode': i_episode,
+                'steps': global_steps,
+                'meanepreward': np.mean(reward_list),
                 'meaneplen': np.mean(len_list)})
             reward_record_true.append({
-                'episode': i_episode, 
-                'steps': global_steps, 
-                'meanepreward': np.mean(reward_list_true), 
+                'episode': i_episode,
+                'steps': global_steps,
+                'meanepreward': np.mean(reward_list_true),
                 'meaneplen': np.mean(len_list)})
             rwds.extend(reward_list_true)
             batch = memory.sample()
@@ -496,7 +483,7 @@ for repeat in train_list:
                 minibatch_returns = returns[minibatch_ind]
                 minibatch_newvalues = network._forward_critic(minibatch_states.cuda()).cpu().flatten()
 
-                ratio =  torch.exp(minibatch_newlogproba - minibatch_oldlogproba)
+                ratio = torch.exp(minibatch_newlogproba - minibatch_oldlogproba)
                 surr1 = ratio * minibatch_advantages
                 surr2 = ratio.clamp(1 - clip_now, 1 + clip_now) * minibatch_advantages
                 loss_surr = - torch.mean(torch.min(surr1, surr2))
@@ -527,22 +514,23 @@ for repeat in train_list:
 
             if i_episode % args.log_num_episode == 0:
                 print('Finished episode: {} Reward: {:.4f} total_loss = {:.4f} = {:.4f} + {} * {:.4f} + {} * {:.4f}' \
-                    .format(i_episode, reward_record[-1]['meanepreward'], total_loss.data, loss_surr.data, args.loss_coeff_value, 
-                    loss_value.data, args.loss_coeff_entropy, loss_entropy.data))
+                      .format(i_episode, reward_record[-1]['meanepreward'], total_loss.data, loss_surr.data, args.loss_coeff_value,
+                              loss_value.data, args.loss_coeff_entropy, loss_entropy.data))
                 print('-----------------')
-                performance = reward_record[-1]['meanepreward'] * (1-early_done/total_done)
+                performance = reward_record[-1]['meanepreward'] * (1 - early_done / total_done)
                 if performance >= Best_performance:
-                    torch.save(network.state_dict(),ENV_NAME.split('-')[0]+config.file_num +'/CheckPoints/EarlyStopPolicy_Suc_{0}hidden_{1}threshold_{2}repeat'.format(config.hid_num,config.thres,str(repeat)+'_temp_best')) 
+                    torch.save(network.state_dict(), ENV_NAME.split('-')[0] + config.file_num + '/CheckPoints/EarlyStopPolicy_Suc_{0}hidden_{1}threshold_{2}repeat'.format(config.hid_num, config.thres, str(repeat) + '_temp_best'))
                     Best_performance = performance
-                
-                    if early_done/total_done< 0.1 and reward_record[-1]['meanepreward']>np.mean(final_100_reward):
-                        print('Find Better Novel Policy!')
-                        #policy_buffer[str(repeat)+'_'+str(i_episode)] = network
 
-                        torch.save(network.state_dict(),ENV_NAME.split('-')[0]+config.file_num +'/CheckPoints/EarlyStopPolicy_Suc_{0}hidden_{1}threshold_{2}repeat'.format(config.hid_num,config.thres,str(repeat)+'_'+str(i_episode))) 
-                print('early stop proportion:',early_done/total_done,'Temp Best Performance:',Best_performance)
+                    if early_done / total_done < 0.1 and reward_record[-1]['meanepreward'] > np.mean(final_100_reward):
+                        print('Find Better Novel Policy!')
+                        # policy_buffer[str(repeat)+'_'+str(i_episode)] = network
+
+                        torch.save(network.state_dict(), ENV_NAME.split('-')[0] + config.file_num + '/CheckPoints/EarlyStopPolicy_Suc_{0}hidden_{1}threshold_{2}repeat'.format(config.hid_num, config.thres, str(repeat) + '_' + str(i_episode)))
+                print('early stop proportion:', early_done / total_done, 'Temp Best Performance:', Best_performance)
                 print('===============================')
         return reward_record
+
 
     def test(args):
         record_dfs = []
@@ -554,12 +542,13 @@ for repeat in train_list:
         record_dfs = pd.concat(record_dfs, axis=0)
         record_dfs.to_csv(joindir(RESULT_DIR, 'ppo-record-{}.csv'.format(args.env_name)))
 
+
     if __name__ == '__main__':
         for envname in [ENV_NAME]:
             args.env_name = envname
             test(args)
 
-    torch.save(network.state_dict(),ENV_NAME.split('-')[0]+config.file_num +'/CheckPoints/EarlyStopPolicy_Suc_{0}hidden_{1}threshold_{2}repeat'.format(config.hid_num,config.thres,repeat)) 
-    np.savetxt(ENV_NAME.split('-')[0]+config.file_num +'/Rwds/EarlyStopPolicy_Suc_rwds_{0}hidden_{1}threshold_{2}repeat'.format(config.hid_num,config.thres,repeat),rwds)
-    network.load_state_dict(torch.load(ENV_NAME.split('-')[0]+config.file_num +'/CheckPoints/EarlyStopPolicy_Suc_{0}hidden_{1}threshold_{2}repeat'.format(config.hid_num,config.thres,str(repeat)+'_temp_best')))
+    torch.save(network.state_dict(), ENV_NAME.split('-')[0] + config.file_num + '/CheckPoints/EarlyStopPolicy_Suc_{0}hidden_{1}threshold_{2}repeat'.format(config.hid_num, config.thres, repeat))
+    np.savetxt(ENV_NAME.split('-')[0] + config.file_num + '/Rwds/EarlyStopPolicy_Suc_rwds_{0}hidden_{1}threshold_{2}repeat'.format(config.hid_num, config.thres, repeat), rwds)
+    network.load_state_dict(torch.load(ENV_NAME.split('-')[0] + config.file_num + '/CheckPoints/EarlyStopPolicy_Suc_{0}hidden_{1}threshold_{2}repeat'.format(config.hid_num, config.thres, str(repeat) + '_temp_best')))
     policy_buffer[str(repeat)] = network.eval()

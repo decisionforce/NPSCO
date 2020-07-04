@@ -1,27 +1,19 @@
 import argparse
+import math
 import os
+from collections import namedtuple
+from os import makedirs as mkdir
+from os.path import join as joindir
+
 import gym
-import matplotlib.pyplot as plt
-from IPython import display
-import os
-import gym
+import numpy as np
+import pandas as pd
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as opt
 from torch import Tensor
-from torch.autograd import Variable
-from collections import namedtuple
-from itertools import count
-import torch.nn.functional as F
-import matplotlib.pyplot as plt
-from os.path import join as joindir
-from os import makedirs as mkdir
-import pandas as pd
-import numpy as np
-import argparse
-import datetime
-import math
-import random
+
 parser = argparse.ArgumentParser()
 parser.add_argument(
     '--hid_num',
@@ -74,12 +66,12 @@ parser.add_argument(
     default=0,
     help='novelty reward weight')
 
-
 config = parser.parse_args()
 ENV_NAME = config.env_name
 env = gym.make(ENV_NAME)
 env.reset()
-os.environ['CUDA_VISIBLE_DEVICES'] = str(config.use_gpu)
+os.environ['CUDA_VISIBLE_DEVICES'] = str(config.use_gpu) if config.use_gpu > 0 else ""
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 class ActorCritic_PPO(nn.Module):
@@ -163,6 +155,8 @@ class ActorCritic_PPO(nn.Module):
         action_logstd = action_logstd.cpu()
         logproba = self._normal_logproba(actions.cpu(), action_mean, action_logstd.cpu())
         return logproba
+
+
 class ActorCritic(nn.Module):
     def __init__(self, num_inputs, num_outputs, layer_norm=True):
         super(ActorCritic, self).__init__()
@@ -192,6 +186,7 @@ class ActorCritic(nn.Module):
             self.layer_norm(self.choreo_fc1, std=1.0)
             self.layer_norm(self.choreo_fc2, std=1.0)
             self.layer_norm(self.choreo_fc3, std=1.0)
+
     @staticmethod
     def layer_norm(layer, std=1.0, bias_const=0.0):
         torch.nn.init.orthogonal_(layer.weight, std)
@@ -259,8 +254,6 @@ class ActorCritic(nn.Module):
         action_logstd = action_logstd.cpu()
         logproba = self._normal_logproba(actions.cpu(), action_mean, action_logstd.cpu())
         return logproba
-    
-    
 
 
 rwds_history = []
@@ -270,85 +263,86 @@ num_inputs = env.observation_space.shape[0]
 num_actions = env.action_space.shape[0]
 for i in range(10):
     try:
-        policy_net = ActorCritic_PPO(num_inputs, num_actions, layer_norm=True).cuda()
-        policy_net.load_state_dict(torch.load(ENV_NAME.split('-')[0] +'/CheckPoints/checkpoint_{0}hidden_{1}drop_prob_{2}repeat'.format(config.hid_num,config.drop_prob,i)))
-        load_list.append('checkpoint_{0}hidden_{1}drop_prob_{2}repeat'.format(config.hid_num,config.drop_prob,i))
+        policy_net = ActorCritic_PPO(num_inputs, num_actions, layer_norm=True).to(device)
+        policy_net.load_state_dict(torch.load(ENV_NAME.split('-')[0] + '/CheckPoints/checkpoint_{0}hidden_{1}drop_prob_{2}repeat'.format(config.hid_num, config.drop_prob, i)))
+        load_list.append('checkpoint_{0}hidden_{1}drop_prob_{2}repeat'.format(config.hid_num, config.drop_prob, i))
         policy_buffer[str(i)] = policy_net.eval()
     except:
-        policy_net = ActorCritic_PPO(num_inputs, num_actions, layer_norm=True).cuda()
-        policy_net.load_state_dict(torch.load(ENV_NAME.split('-')[0] +'/CheckPoints/checkpoint_{0}hidden_{1}drop_prob_{2}repeat'.format(config.hid_num,config.drop_prob,i)))
-        load_list.append('checkpoint_{0}hidden_{1}drop_prob_{2}repeat'.format(config.hid_num,config.drop_prob,i))
+        policy_net = ActorCritic_PPO(num_inputs, num_actions, layer_norm=True).to(device)
+        policy_net.load_state_dict(torch.load(ENV_NAME.split('-')[0] + '/CheckPoints/checkpoint_{0}hidden_{1}drop_prob_{2}repeat'.format(config.hid_num, config.drop_prob, i)))
+        load_list.append('checkpoint_{0}hidden_{1}drop_prob_{2}repeat'.format(config.hid_num, config.drop_prob, i))
         policy_buffer[str(i)] = policy_net.eval()
         pass
 fn_list = []
 for i in range(10):
     try:
-        fn_list.append(np.loadtxt(ENV_NAME.split('-')[0]+'/Rwds/rwds_{0}hidden_{1}drop_prob_{2}repeat'.format(config.hid_num,config.drop_prob,i)))
+        fn_list.append(np.loadtxt(ENV_NAME.split('-')[0] + '/Rwds/rwds_{0}hidden_{1}drop_prob_{2}repeat'.format(config.hid_num, config.drop_prob, i)))
     except:
-        print('wrong in ',i)
+        print('wrong in ', i)
 final_100_reward = []
 for i in range(len(fn_list)):
     final_100_reward.append(np.mean(fn_list[i][-100:]))
-print('final 100 mean reward:',np.mean(final_100_reward[:]))
+print('final 100 mean reward:', np.mean(final_100_reward[:]))
 
 T_start = 20
 Lower_Novel_Bound = -0.1
 
+RESULT_DIR = ENV_NAME.split('-')[0] + config.file_num + '/Result_PPO'
+mkdir(RESULT_DIR, exist_ok=True)
+mkdir(ENV_NAME.split('-')[0] + config.file_num + '/Rwds', exist_ok=True)
+mkdir(ENV_NAME.split('-')[0] + config.file_num + '/CheckPoints', exist_ok=True)
 
-RESULT_DIR = ENV_NAME.split('-')[0]+config.file_num +'/Result_PPO'
-mkdir(RESULT_DIR,exist_ok=True)
-mkdir(ENV_NAME.split('-')[0]+config.file_num +'/Rwds', exist_ok=True)
-mkdir(ENV_NAME.split('-')[0]+config.file_num +'/CheckPoints', exist_ok=True)    
+
 class calc_policy_novelty(object):
-    def __init__(self,Policy_Buffer,THRESH = config.thres,dis_type='min'):
+    def __init__(self, Policy_Buffer, THRESH=config.thres, dis_type='min'):
         self.Policy_Buffer = Policy_Buffer
         self.num_of_policies = len(Policy_Buffer)
         self.novelty_recorder = np.zeros(self.num_of_policies)
         self.novelty_recorder_len = 0
         self.THRESH = THRESH
         self.dis_type = dis_type
-    def calculate(self,state,action):
+
+    def calculate(self, state, action):
         if len(self.Policy_Buffer) == 0:
             return 0
-        for i,key_i in enumerate(self.Policy_Buffer.keys()):
+        for i, key_i in enumerate(self.Policy_Buffer.keys()):
             if i < 10:
                 self.Policy_Buffer[key_i].eval()
-                a_mean, a_logstd, val = self.Policy_Buffer[key_i].forward((Tensor(state).float().unsqueeze(0).cuda()))
+                a_mean, a_logstd, val = self.Policy_Buffer[key_i].forward((Tensor(state).float().unsqueeze(0).to(device)))
                 self.novelty_recorder[i] += np.linalg.norm(a_mean.cpu().detach().numpy() - action.cpu().detach().numpy())
             else:
                 self.Policy_Buffer[key_i].eval()
-                a_mean, a_logstd, val, val_novel = self.Policy_Buffer[key_i].forward((Tensor(state).float().unsqueeze(0).cuda()))
+                a_mean, a_logstd, val, val_novel = self.Policy_Buffer[key_i].forward((Tensor(state).float().unsqueeze(0).to(device)))
                 self.novelty_recorder[i] += np.linalg.norm(a_mean.cpu().detach().numpy() - action.cpu().detach().numpy())
-        self.novelty_recorder_len +=1
+        self.novelty_recorder_len += 1
         if self.dis_type == 'min':
-            min_novel = np.min(self.novelty_recorder/self.novelty_recorder_len)
+            min_novel = np.min(self.novelty_recorder / self.novelty_recorder_len)
             return min_novel - self.THRESH
         elif self.dis_type == 'max':
-            max_novel = np.max(self.novelty_recorder/self.novelty_recorder_len)
+            max_novel = np.max(self.novelty_recorder / self.novelty_recorder_len)
             return max_novel - self.THRESH
-    
+
+
 train_list = []
 
-for i in range(10,25):
+for i in range(10, 25):
     try:
-        policy_net = ActorCritic(num_inputs, num_actions, layer_norm=True).cuda()
-        policy_net.load_state_dict(torch.load(ENV_NAME.split('-')[0]+config.file_num +'/CheckPoints/EarlyStopPolicy_Suc_{0}hidden_{1}threshold_{2}repeat'.format(config.hid_num,config.thres,i)))
-        load_list.append('EarlyStopPolicy_Suc_{0}hidden_{1}threshold_{2}repeat'.format(config.hid_num,config.thres,i))
+        policy_net = ActorCritic(num_inputs, num_actions, layer_norm=True).to(device)
+        policy_net.load_state_dict(torch.load(ENV_NAME.split('-')[0] + config.file_num + '/CheckPoints/EarlyStopPolicy_Suc_{0}hidden_{1}threshold_{2}repeat'.format(config.hid_num, config.thres, i)))
+        load_list.append('EarlyStopPolicy_Suc_{0}hidden_{1}threshold_{2}repeat'.format(config.hid_num, config.thres, i))
         policy_buffer[str(i)] = policy_net.eval()
     except:
         train_list.append(i)
-print('training list now is:',train_list)
-
+print('training list now is:', train_list)
 
 for repeat in train_list:
-    print(len(policy_buffer),repeat)
+    print(len(policy_buffer), repeat)
 
-    Transition = namedtuple('Transition', ('state', 'value','choreo_value', 'action', 'logproba', 'mask', 'next_state', 'reward','reward_novel'))
+    Transition = namedtuple('Transition', ('state', 'value', 'choreo_value', 'action', 'logproba', 'mask', 'next_state', 'reward', 'reward_novel'))
     EPS = 1e-10
 
-    
-    
     rwds = []
+
 
     class args(object):
         env_name = ENV_NAME
@@ -453,13 +447,14 @@ for repeat in train_list:
         def __len__(self):
             return len(self.memory)
 
-    env = gym.make(ENV_NAME)  
+
+    env = gym.make(ENV_NAME)
     num_inputs = env.observation_space.shape[0]
     num_actions = env.action_space.shape[0]
-    network = ActorCritic(num_inputs, num_actions, layer_norm=args.layer_norm).cuda()
+    network = ActorCritic(num_inputs, num_actions, layer_norm=args.layer_norm).to(device)
     network.train()
-    
-    
+
+
     def ppo(args):
         env = gym.make(args.env_name)
         num_inputs = env.observation_space.shape[0]
@@ -468,7 +463,7 @@ for repeat in train_list:
         env.seed(args.seed)
         torch.manual_seed(args.seed)
 
-        #network = ActorCritic(num_inputs, num_actions, layer_norm=args.layer_norm)
+        # network = ActorCritic(num_inputs, num_actions, layer_norm=args.layer_norm)
         optimizer = opt.Adam(network.parameters(), lr=args.lr)
 
         running_state = ZFilter((num_inputs,), clip=5.0)
@@ -481,12 +476,12 @@ for repeat in train_list:
         lr_now = args.lr
         clip_now = args.clip
         Best_performance = 0
-        
+
         for i_episode in range(args.num_episode):
             # step1: perform current policy to collect trajectories
             # this is an on-policy method!
             memory = Memory()
-            
+
             num_steps = 0
             reward_list = []
             reward_list_novel = []
@@ -497,39 +492,38 @@ for repeat in train_list:
             reward_novel_sum = 0
             while num_steps < args.batch_size:
                 state = env.reset()
-                
+
                 cpn = calc_policy_novelty(Policy_Buffer=policy_buffer)
-                
+
                 if args.state_norm:
                     state = running_state(state)
                 reward_sum = 0
-                #reward_novel_sum = 0
+                # reward_novel_sum = 0
                 for t in range(args.max_step_per_round):
-                    action_mean, action_logstd, value, choreo_value = network(Tensor(state).float().unsqueeze(0).cuda())
-
+                    action_mean, action_logstd, value, choreo_value = network(Tensor(state).float().unsqueeze(0).to(device))
 
                     action, logproba = network.select_action(action_mean, action_logstd)
                     action = action.cpu().data.numpy()[0]
                     logproba = logproba.cpu().data.numpy()[0]
 
                     next_state, reward, done, _ = env.step(action)
-                    #reward_novel = calc_distance(state,action_mean,policy_buffer) 
-                    reward_novel = cpn.calculate(state,action_mean)
-                    if t>=T_start:
+                    # reward_novel = calc_distance(state,action_mean,policy_buffer)
+                    reward_novel = cpn.calculate(state, action_mean)
+                    if t >= T_start:
                         reward_novel_sum += reward_novel
                     '''
                     TNB
                     '''
                     reward_sum += reward
-                    
+
                     if args.state_norm:
                         next_state = running_state(next_state)
                     mask = 0 if done else 1
 
-                    memory.push(state, value,choreo_value, action, logproba, mask, next_state, reward, reward_novel)
+                    memory.push(state, value, choreo_value, action, logproba, mask, next_state, reward, reward_novel)
 
                     if done:
-                        total_done+=1
+                        total_done += 1
                         break
 
                     state = next_state
@@ -540,16 +534,16 @@ for repeat in train_list:
                 reward_list_novel.append(reward_novel_sum)
                 len_list.append(t + 1)
             reward_record.append({
-                'episode': i_episode, 
-                'steps': global_steps, 
-                'meanepreward': np.mean(reward_list), 
+                'episode': i_episode,
+                'steps': global_steps,
+                'meanepreward': np.mean(reward_list),
                 'meaneplen': np.mean(len_list)})
             reward_record_novel.append({
-                'episode': i_episode, 
-                'steps': global_steps, 
-                'meanepreward': np.mean(reward_list_novel), 
+                'episode': i_episode,
+                'steps': global_steps,
+                'meanepreward': np.mean(reward_list_novel),
                 'meaneplen': np.mean(len_list)})
-            
+
             rwds.extend(reward_list)
             batch = memory.sample()
             batch_size = len(memory)
@@ -569,7 +563,7 @@ for repeat in train_list:
             prev_return = 0
             prev_value = 0
             prev_advantage = 0
-            
+
             '''----Start for Choreo----'''
             rewards_novel = Tensor(batch.reward_novel)
             values_novel = Tensor(batch.choreo_value)
@@ -577,18 +571,16 @@ for repeat in train_list:
             actions_novel = actions
             states_novel = states
             oldlogproba_novel = oldlogproba
-            
+
             returns_novel = Tensor(batch_size)
             deltas_novel = Tensor(batch_size)
             advantages_novel = Tensor(batch_size)
-            
+
             prev_return_novel = 0
             prev_value_novel = 0
             prev_advantage_novel = 0
             '''----End for Choreo----'''
-            
-            
-            
+
             for i in reversed(range(batch_size)):
                 returns[i] = rewards[i] + args.gamma * prev_return * masks[i]
                 deltas[i] = rewards[i] + args.gamma * prev_value * masks[i] - values[i]
@@ -598,8 +590,7 @@ for repeat in train_list:
                 prev_return = returns[i]
                 prev_value = values[i]
                 prev_advantage = advantages[i]
-                
-                
+
                 '''Start Choreo'''
                 returns_novel[i] = rewards_novel[i] + args.gamma * prev_return_novel * masks_novel[i]
                 deltas_novel[i] = rewards_novel[i] + args.gamma * prev_value_novel * masks_novel[i] - values_novel[i]
@@ -610,10 +601,7 @@ for repeat in train_list:
                 prev_value_novel = values_novel[i]
                 prev_advantage_novel = advantages_novel[i]
                 '''End Choreo'''
-                
-                
-                
-                
+
             if args.advantage_norm:
                 advantages = (advantages - advantages.mean()) / (advantages.std() + EPS)
                 '''Start Choreo'''
@@ -626,12 +614,12 @@ for repeat in train_list:
                 minibatch_states = states[minibatch_ind]
                 minibatch_actions = actions[minibatch_ind]
                 minibatch_oldlogproba = oldlogproba[minibatch_ind]
-                minibatch_newlogproba = network.get_logproba(minibatch_states.cuda(), minibatch_actions.cuda()).cpu()
+                minibatch_newlogproba = network.get_logproba(minibatch_states.to(device), minibatch_actions.to(device)).cpu()
                 minibatch_advantages = advantages[minibatch_ind]
                 minibatch_returns = returns[minibatch_ind]
-                minibatch_newvalues = network._forward_critic(minibatch_states.cuda()).cpu().flatten()
+                minibatch_newvalues = network._forward_critic(minibatch_states.to(device)).cpu().flatten()
 
-                ratio =  torch.exp(minibatch_newlogproba - minibatch_oldlogproba)
+                ratio = torch.exp(minibatch_newlogproba - minibatch_oldlogproba)
                 surr1 = ratio * minibatch_advantages
                 surr2 = ratio.clamp(1 - clip_now, 1 + clip_now) * minibatch_advantages
                 loss_surr = - torch.mean(torch.min(surr1, surr2))
@@ -645,17 +633,17 @@ for repeat in train_list:
                 loss_entropy = torch.mean(torch.exp(minibatch_newlogproba) * minibatch_newlogproba)
 
                 total_loss = loss_surr + args.loss_coeff_value * loss_value + args.loss_coeff_entropy * loss_entropy
-                
+
                 '''Start Choreo'''
                 minibatch_states_novel = states_novel[minibatch_ind]
                 minibatch_actions_novel = actions_novel[minibatch_ind]
                 minibatch_oldlogproba_novel = oldlogproba_novel[minibatch_ind]
-                minibatch_newlogproba_novel = network.get_logproba(minibatch_states_novel.cuda(), minibatch_actions_novel.cuda()).cpu()
+                minibatch_newlogproba_novel = network.get_logproba(minibatch_states_novel.to(device), minibatch_actions_novel.to(device)).cpu()
                 minibatch_advantages_novel = advantages_novel[minibatch_ind]
                 minibatch_returns_novel = returns_novel[minibatch_ind]
-                minibatch_newvalues_novel = network._forward_choreo(minibatch_states_novel.cuda()).cpu().flatten()
+                minibatch_newvalues_novel = network._forward_choreo(minibatch_states_novel.to(device)).cpu().flatten()
 
-                ratio_novel =  torch.exp(minibatch_newlogproba_novel - minibatch_oldlogproba_novel)
+                ratio_novel = torch.exp(minibatch_newlogproba_novel - minibatch_oldlogproba_novel)
                 surr1_novel = ratio_novel * minibatch_advantages_novel
                 surr2_novel = ratio_novel.clamp(1 - clip_now, 1 + clip_now) * minibatch_advantages_novel
                 loss_surr_novel = - torch.mean(torch.min(surr1_novel, surr2_novel))
@@ -670,19 +658,19 @@ for repeat in train_list:
 
                 total_loss_novel = loss_surr_novel + args.loss_coeff_value * loss_value_novel + args.loss_coeff_entropy * loss_entropy_novel
                 '''End Choreo'''
-                
+
                 if len(policy_buffer) == 0:
                     optimizer.zero_grad()
                     total_loss.backward()
                     optimizer.step()
-                else: 
+                else:
                     if reward_novel_sum >= Lower_Novel_Bound:
                         optimizer.zero_grad()
                         total_loss.backward()
                         optimizer.step()
                     else:
                         '''Start Choreo'''
-                        optimizer.zero_grad()                
+                        optimizer.zero_grad()
                         total_loss_novel.backward(retain_graph=True)  # novel loss
                         grad1 = []
                         for param in network.parameters():
@@ -706,15 +694,15 @@ for repeat in train_list:
                         norm1 = torch.norm(grad1, p=2)
                         norm2 = torch.norm(grad2, p=2)
                         if cos > 0:  # less than 90
-                            grad = grad1/norm1 + grad2/norm2
+                            grad = grad1 / norm1 + grad2 / norm2
                         else:
-                            grad = -(cos/norm1)*grad1 + (1/norm2)*grad2
+                            grad = -(cos / norm1) * grad1 + (1 / norm2) * grad2
                         grad = grad / torch.norm(grad, p=2) * (norm1 + norm2) / 2
                         # fill the grad into param.grad
                         base = 0
                         optimizer.zero_grad()
                         for param in network.parameters():
-                            param.grad += grad[base:base+param.numel()].reshape_as(param)
+                            param.grad += grad[base:base + param.numel()].reshape_as(param)
                             base += param.numel()
                         optimizer.step()
                         '''End Choreo'''
@@ -733,28 +721,29 @@ for repeat in train_list:
 
             if i_episode % args.log_num_episode == 0:
                 print('Finished episode: {} Reward: {:.4f} total_loss = {:.4f} = {:.4f} + {} * {:.4f} + {} * {:.4f}' \
-                    .format(i_episode, reward_record[-1]['meanepreward'], total_loss.data, loss_surr.data, args.loss_coeff_value, 
-                    loss_value.data, args.loss_coeff_entropy, loss_entropy.data))
+                      .format(i_episode, reward_record[-1]['meanepreward'], total_loss.data, loss_surr.data, args.loss_coeff_value,
+                              loss_value.data, args.loss_coeff_entropy, loss_entropy.data))
                 print('-----------------')
-                avg_r = reward_record[-1]['meanepreward']/reward_record[-1]['meaneplen']
-                avg_rn = reward_record_novel[-1]['meanepreward']/reward_record_novel[-1]['meaneplen']
-                print('average reward',avg_r)
-                print('average novelty reward',avg_rn)
-                #print('True RN',avg_rn)
-                print('loss and novel loss',total_loss,total_loss_novel)
-                performance = reward_record[-1]['meanepreward'] * (1-early_done/total_done)
+                avg_r = reward_record[-1]['meanepreward'] / reward_record[-1]['meaneplen']
+                avg_rn = reward_record_novel[-1]['meanepreward'] / reward_record_novel[-1]['meaneplen']
+                print('average reward', avg_r)
+                print('average novelty reward', avg_rn)
+                # print('True RN',avg_rn)
+                print('loss and novel loss', total_loss, total_loss_novel)
+                performance = reward_record[-1]['meanepreward'] * (1 - early_done / total_done)
                 if performance >= Best_performance:
-                    torch.save(network.state_dict(),ENV_NAME.split('-')[0]+config.file_num +'/CheckPoints/EarlyStopPolicy_Suc_{0}hidden_{1}threshold_{2}repeat'.format(config.hid_num,config.thres,str(repeat)+'_temp_best')) 
+                    torch.save(network.state_dict(), ENV_NAME.split('-')[0] + config.file_num + '/CheckPoints/EarlyStopPolicy_Suc_{0}hidden_{1}threshold_{2}repeat'.format(config.hid_num, config.thres, str(repeat) + '_temp_best'))
                     Best_performance = performance
-                
-                    if early_done/total_done< 0.1 and reward_record[-1]['meanepreward']>np.mean(final_100_reward):
-                        print('Find Better Novel Policy!')
-                        #policy_buffer[str(repeat)+'_'+str(i_episode)] = network
 
-                        torch.save(network.state_dict(),ENV_NAME.split('-')[0]+config.file_num +'/CheckPoints/EarlyStopPolicy_Suc_{0}hidden_{1}threshold_{2}repeat'.format(config.hid_num,config.thres,str(repeat)+'_'+str(i_episode))) 
-                print('early stop proportion:',early_done/total_done,'Temp Best Performance:',Best_performance)
+                    if early_done / total_done < 0.1 and reward_record[-1]['meanepreward'] > np.mean(final_100_reward):
+                        print('Find Better Novel Policy!')
+                        # policy_buffer[str(repeat)+'_'+str(i_episode)] = network
+
+                        torch.save(network.state_dict(), ENV_NAME.split('-')[0] + config.file_num + '/CheckPoints/EarlyStopPolicy_Suc_{0}hidden_{1}threshold_{2}repeat'.format(config.hid_num, config.thres, str(repeat) + '_' + str(i_episode)))
+                print('early stop proportion:', early_done / total_done, 'Temp Best Performance:', Best_performance)
                 print('===============================')
         return reward_record
+
 
     def test(args):
         record_dfs = []
@@ -764,13 +753,15 @@ for repeat in train_list:
             reward_record['#parallel_run'] = i
             record_dfs.append(reward_record)
         record_dfs = pd.concat(record_dfs, axis=0)
-        record_dfs.to_csv(joindir(RESULT_DIR, 'ppo-record-{0}_{1}hidden_{2}threshold_{3}repeat'.format(args.env_name,config.hid_num,config.thres,repeat)))
+        record_dfs.to_csv(joindir(RESULT_DIR, 'ppo-record-{0}_{1}hidden_{2}threshold_{3}repeat'.format(args.env_name, config.hid_num, config.thres, repeat)))
+
+
     if __name__ == '__main__':
         for envname in [ENV_NAME]:
             args.env_name = envname
             test(args)
 
-    torch.save(network.state_dict(),ENV_NAME.split('-')[0]+config.file_num +'/CheckPoints/EarlyStopPolicy_Suc_{0}hidden_{1}threshold_{2}repeat'.format(config.hid_num,config.thres,repeat)) 
-    np.savetxt(ENV_NAME.split('-')[0]+config.file_num +'/Rwds/EarlyStopPolicy_Suc_rwds_{0}hidden_{1}threshold_{2}repeat'.format(config.hid_num,config.thres,repeat),rwds)
-    network.load_state_dict(torch.load(ENV_NAME.split('-')[0]+config.file_num +'/CheckPoints/EarlyStopPolicy_Suc_{0}hidden_{1}threshold_{2}repeat'.format(config.hid_num,config.thres,str(repeat)+'_temp_best')))
+    torch.save(network.state_dict(), ENV_NAME.split('-')[0] + config.file_num + '/CheckPoints/EarlyStopPolicy_Suc_{0}hidden_{1}threshold_{2}repeat'.format(config.hid_num, config.thres, repeat))
+    np.savetxt(ENV_NAME.split('-')[0] + config.file_num + '/Rwds/EarlyStopPolicy_Suc_rwds_{0}hidden_{1}threshold_{2}repeat'.format(config.hid_num, config.thres, repeat), rwds)
+    network.load_state_dict(torch.load(ENV_NAME.split('-')[0] + config.file_num + '/CheckPoints/EarlyStopPolicy_Suc_{0}hidden_{1}threshold_{2}repeat'.format(config.hid_num, config.thres, str(repeat) + '_temp_best')))
     policy_buffer[str(repeat)] = network.eval()
