@@ -2,6 +2,8 @@
 
 
 ## Quick Start
+
+![image](./docs/cover_nps.png)
 This repo provides the code for the work *Novel Policy Seeking with Constrained Optimization*. The only dependencies are pytorch, gym and mujoco. 
 
 To reproduce the results reported in the paper, please run the follows:
