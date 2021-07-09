@@ -1,5 +1,6 @@
 # Novel Policy Seeking with Constrained Optimization
 
+In problem-solving, we humans can come up with multiple novel solutions to the same problem. However, reinforcement learning algorithms can only produce a set of monotonous policies that maximize the cumulative reward but lack diversity and novelty. In this work, we address the problem of generating novel policies in reinforcement learning tasks. Instead of following the multi-objective framework used in existing methods, we propose to rethink the problem under a novel perspective of constrained optimization. We first introduce a new metric to evaluate the difference between policies and then design two practical novel policy generation methods following the new perspective. The two proposed methods, namely the Constrained Task Novel Bisector (CTNB) and the Interior Policy Differentiation (IPD), are derived from the feasible direction method and the interior point method commonly known in the constrained optimization literature. Experimental comparisons on the MuJoCo control suite show our methods can achieve substantial improvement over previous novelty-seeking methods in terms of both the novelty of policies and their performances in the primal task.
 
 ## Quick Start
 
